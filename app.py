@@ -1,45 +1,46 @@
-# Math Hero - Streamlit Complete Prototype (Updated)
-# File: math_hero_streamlit_full.py
-# Run: streamlit run math_hero_streamlit_full.py
+# Math Hero v3 - Streamlit Complete Game (Grades 2-10)
+# File: math_hero_streamlit_v3.py
+# Run: streamlit run math_hero_streamlit_v3.py
 
 import streamlit as st
 import random
 import time
 from PIL import Image, ImageDraw
 import io
-import math
 
 # -------------------------
-# Page config
+# Config
 # -------------------------
-st.set_page_config(
-    page_title="Math Hero",
-    page_icon="🦸‍♂️",
-    layout="centered",
-    initial_sidebar_state="expanded",
-)
+APP_TITLE = "Math Hero v3"
+LEVELS_PER_GRADE = 20
+QUESTIONS_PER_LEVEL = 10
+PASS_PERCENTAGE = 70  # 70% to pass
+
+st.set_page_config(page_title=APP_TITLE, page_icon="🦸‍♂️", layout="centered")
 
 # -------------------------
-# Session state initialization
+# Session state init helper
 # -------------------------
 
 def init_state():
     defaults = {
         'grade': 3,
         'mode': 'Math Quiz',
-        'score': 0,
-        'level': 1,
-        'question_index': 0,
+        'current_level': 1,
+        'level_unlocked': {g:1 for g in range(2,11)},  # unlocked level per grade
+        'level_progress': {g: {} for g in range(2,11)},  # store pass/fail per level
         'started': False,
-        'history': [],
         'current_question': None,
         'current_answer': None,
         'current_choices': None,
         'question_start_time': None,
-        'time_limit': 30,  # seconds per question
-        'consecutive_correct': 0,
-        'weak_topics': {},
+        'time_limit': 45,
+        'question_in_level': 0,
+        'correct_in_level': 0,
+        'history': [],
         'user_answer': '',
+        'show_level_result': False,
+        'last_result': None,  # dict with stats
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -48,105 +49,255 @@ def init_state():
 init_state()
 
 # -------------------------
-# Question generators
+# Question generators grouped by topic
 # -------------------------
 
-def gen_addition(grade):
-    a = random.randint(1, 10 * grade)
-    b = random.randint(1, 10 * grade)
-    q = f"{a} + {b} = ?"
-    return q, a + b
+def gen_addition(maxv=100):
+    a = random.randint(1, maxv)
+    b = random.randint(1, maxv)
+    return f"{a} + {b} = ?", a + b
 
 
-def gen_subtraction(grade):
-    a = random.randint(1, 10 * grade)
+def gen_subtraction(maxv=100):
+    a = random.randint(1, maxv)
     b = random.randint(1, a)
-    q = f"{a} - {b} = ?"
+    return f"{a} - {b} = ?", a - b
+
+
+def gen_multiplication(maxv=12):
+    a = random.randint(1, maxv)
+    b = random.randint(1, maxv)
+    return f"{a} × {b} = ?", a * b
+
+
+def gen_division(maxv=12):
+    b = random.randint(1, maxv)
+    c = random.randint(1, maxv)
+    a = b * c
+    return f"{a} ÷ {b} = ?", c
+
+# comparison
+def gen_comparison(maxv=50):
+    a = random.randint(0, maxv)
+    b = random.randint(0, maxv)
+    q = f"Which is greater: {a} or {b}? Write '>' or '<' or '='."
+    if a > b:
+        ans = '>'
+    elif a < b:
+        ans = '<'
+    else:
+        ans = '='
+    return q, ans
+
+# simple word problems
+def gen_simple_statement(grade):
+    a = random.randint(1, 10*grade)
+    b = random.randint(1, 5*grade)
+    q = f"Ali had {a} apples. He gave {b} apples to Ahmed. How many apples left?"
     return q, a - b
 
-
-def gen_multiplication(grade):
-    a = random.randint(1, max(3, grade + 2))
-    b = random.randint(1, 12)
-    q = f"{a} × {b} = ?"
-    return q, a * b
-
-
-def gen_division(grade):
-    b = random.randint(1, min(12, grade + 6))
-    c = random.randint(1, 12)
-    a = b * c
-    q = f"{a} ÷ {b} = ?"
-    return q, c
-
-
-def gen_fraction_add(grade):
-    d = random.choice([2,3,4,5,6])
+# fractions
+def gen_fraction_proper(grade):
+    d = random.randint(2, 8)
     a = random.randint(1, d-1)
     b = random.randint(1, d-1)
-    numerator = a + b
-    # simplify fraction
+    q = f"{a}/{d} + {b}/{d} = ? (simplify)"
+    num = a + b
+    den = d
+    # simplify
     def gcd(x,y):
         while y:
             x,y = y, x%y
         return x
-    g = gcd(numerator, d)
-    simp_num = numerator//g
-    simp_den = d//g
-    q = f"{a}/{d} + {b}/{d} = ? (simplified)"
-    return q, f"{simp_num}/{simp_den}"
+    g = gcd(num, den)
+    return q, f"{num//g}/{den//g}"
 
+def gen_fraction_improper(grade):
+    a = random.randint(5, 15)
+    b = random.randint(2, 8)
+    q = f"Write {a}/{b} as a mixed number."
+    whole = a // b
+    rem = a % b
+    if rem == 0:
+        ans = str(whole)
+    else:
+        ans = f"{whole} {rem}/{b}"
+    return q, ans
 
-def gen_algebra_linear(grade):
-    x = random.randint(1, 10)
-    m = random.randint(1, 5)
-    c = random.randint(0, 10)
-    a = m * x + c
-    q = f"Solve for x: {m}x + {c} = {a}"
-    return q, x
+# lcm and hcf
+def gen_lcm(grade):
+    a = random.randint(2, 20)
+    b = random.randint(2, 20)
+    def lcm(x,y):
+        import math
+        return x*y//math.gcd(x,y)
+    q = f"Find LCM of {a} and {b}."
+    return q, lcm(a,b)
 
+def gen_hcf(grade):
+    a = random.randint(2, 50)
+    b = random.randint(2, 50)
+    import math
+    q = f"Find HCF (GCD) of {a} and {b}."
+    return q, math.gcd(a,b)
 
+# percentage, profit/loss
+def gen_percentage(grade):
+    base = random.randint(10,200)
+    per = random.choice([5,10,15,20,25])
+    q = f"What is {per}% of {base}?"
+    return q, round(base*per/100,2)
+
+def gen_profit_loss(grade):
+    cost = random.randint(50,500)
+    profit_pct = random.choice([10,20,25,30])
+    sell = int(cost*(1+profit_pct/100))
+    q = f"Cost price {cost}, selling price {sell}. What is profit %?"
+    return q, profit_pct
+
+# area/perimeter
 def gen_area_rectangle(grade):
-    l = random.randint(1, 10 + grade)
-    w = random.randint(1, 10 + grade)
-    q = f"Area of rectangle with length {l} and width {w} = ?"
+    l = random.randint(2, 20)
+    w = random.randint(1, 15)
+    q = f"Area of rectangle length={l} cm and width={w} cm = ?"
     return q, l*w
 
+def gen_perimeter_rectangle(grade):
+    l = random.randint(2, 20)
+    w = random.randint(1, 15)
+    q = f"Perimeter of rectangle length={l} cm and width={w} cm = ?"
+    return q, 2*(l+w)
 
-def choose_math_topic(grade):
+# higher grade topics
+def gen_functions(grade):
+    a = random.randint(1,5)
+    b = random.randint(0,10)
+    x = random.randint(1,10)
+    q = f"Given f(x) = {a}x + {b}. Find f({x})."
+    return q, a*x + b
+
+def gen_sets(grade):
+    # simple membership question
+    A = set(random.sample(range(1,20), 5))
+    x = random.choice(list(A))
+    q = f"Given set A = {sorted(A)}. Is {x} in set A? Answer 'yes' or 'no'."
+    return q, 'yes'
+
+def gen_trigonometry(grade):
+    # basic common angles
+    angles = {30:0.5,45:math.sqrt(2)/2,60:math.sqrt(3)/2}
+    ang = random.choice(list(angles.keys()))
+    func = random.choice(['sin','cos','tan'])
+    q = f"What is {func}({ang}°)? (approx if needed)"
+    if func == 'sin':
+        ans = round(angles[ang],3) if ang in angles else None
+    elif func == 'cos':
+        # cos(30)=sqrt3/2 etc
+        if ang==30: ans = round(math.sqrt(3)/2,3)
+        elif ang==45: ans = round(math.sqrt(2)/2,3)
+        elif ang==60: ans = round(0.5,3)
+    else:
+        if ang==30: ans = round(1/math.sqrt(3),3)
+        elif ang==45: ans = 1.0
+        elif ang==60: ans = round(math.sqrt(3),3)
+    return q, ans
+
+def gen_slope(grade):
+    x1,y1 = random.randint(0,5), random.randint(0,5)
+    x2,y2 = x1+random.randint(1,5), y1+random.randint(-3,5)
+    q = f"Find slope of line through ({x1},{y1}) and ({x2},{y2})."
+    slope = (y2-y1)/(x2-x1)
+    return q, round(slope,3)
+
+def gen_matrices(grade):
+    # 2x2 addition
+    a = random.randint(0,5)
+    b = random.randint(0,5)
+    c = random.randint(0,5)
+    d = random.randint(0,5)
+    e = random.randint(0,5)
+    f_ = random.randint(0,5)
+    g = random.randint(0,5)
+    h = random.randint(0,5)
+    q = f"Add matrices: [[{a},{b}],[{c},{d}]] + [[{e},{f_}],[{g},{h}]]. Write result as [[x,y],[z,w]]."
+    ans = f"[[{a+e},{b+f_}],[{c+g},{d+h}]]"
+    return q, ans
+
+# choose topic per grade
+import math
+
+def choose_topic_for_grade(grade):
     if grade <= 4:
-        topics = ['addition','subtraction','multiplication']
-    elif grade <= 6:
-        topics = ['addition','subtraction','multiplication','division']
+        pool = ['addition','subtraction','multiplication','division','comparison','simple_statement']
     elif grade <= 8:
-        topics = ['multiplication','division','fractions','area']
+        pool = ['fractions_proper','fractions_improper','lcm','hcf','percentage','profit_loss','area_rect','perimeter_rect']
     else:
-        topics = ['algebra','fractions','area','division']
-    return random.choice(topics)
+        pool = ['functions','sets','trigonometry','slope','fractions_proper','matrices']
+    return random.choice(pool)
 
+# generate a math question based on chosen topic
 
-def generate_math_question(grade):
-    topic = choose_math_topic(grade)
+def generate_math_question_for_grade(grade):
+    topic = choose_topic_for_grade(grade)
     if topic == 'addition':
-        q, ans = gen_addition(grade)
-    elif topic == 'subtraction':
-        q, ans = gen_subtraction(grade)
-    elif topic == 'multiplication':
-        q, ans = gen_multiplication(grade)
-    elif topic == 'division':
-        q, ans = gen_division(grade)
-    elif topic == 'fractions':
-        q, ans = gen_fraction_add(grade)
-    elif topic == 'algebra':
-        q, ans = gen_algebra_linear(grade)
-    elif topic == 'area':
-        q, ans = gen_area_rectangle(grade)
-    else:
-        q, ans = gen_addition(grade)
-    return {'type':'math','topic':topic,'question':q,'answer':ans}
+        return {'type':'math','topic':topic,'question':gen_addition(10*grade)[0],'answer':gen_addition(10*grade)[1]}
+    if topic == 'subtraction':
+        return {'type':'math','topic':topic,'question':gen_subtraction(10*grade)[0],'answer':gen_subtraction(10*grade)[1]}
+    if topic == 'multiplication':
+        return {'type':'math','topic':topic,'question':gen_multiplication(12)[0],'answer':gen_multiplication(12)[1]}
+    if topic == 'division':
+        return {'type':'math','topic':topic,'question':gen_division(12)[0],'answer':gen_division(12)[1]}
+    if topic == 'comparison':
+        q,a = gen_comparison(20)
+        return {'type':'math','topic':topic,'question':q,'answer':a}
+    if topic == 'simple_statement':
+        q,a = gen_simple_statement(grade)
+        return {'type':'math','topic':topic,'question':q,'answer':a}
+    if topic == 'fractions_proper':
+        q,a = gen_fraction_proper(grade)
+        return {'type':'math','topic':'fractions','question':q,'answer':a}
+    if topic == 'fractions_improper':
+        q,a = gen_fraction_improper(grade)
+        return {'type':'math','topic':'fractions','question':q,'answer':a}
+    if topic == 'lcm':
+        q,a = gen_lcm(grade)
+        return {'type':'math','topic':'lcm','question':q,'answer':a}
+    if topic == 'hcf':
+        q,a = gen_hcf(grade)
+        return {'type':'math','topic':'hcf','question':q,'answer':a}
+    if topic == 'percentage':
+        q,a = gen_percentage(grade)
+        return {'type':'math','topic':'percentage','question':q,'answer':a}
+    if topic == 'profit_loss':
+        q,a = gen_profit_loss(grade)
+        return {'type':'math','topic':'profit_loss','question':q,'answer':a}
+    if topic == 'area_rect':
+        q,a = gen_area_rectangle(grade)
+        return {'type':'math','topic':'area','question':q,'answer':a}
+    if topic == 'perimeter_rect':
+        q,a = gen_perimeter_rectangle(grade)
+        return {'type':'math','topic':'perimeter','question':q,'answer':a}
+    if topic == 'functions':
+        q,a = gen_functions(grade)
+        return {'type':'math','topic':'functions','question':q,'answer':a}
+    if topic == 'sets':
+        q,a = gen_sets(grade)
+        return {'type':'math','topic':'sets','question':q,'answer':a}
+    if topic == 'trigonometry':
+        q,a = gen_trigonometry(grade)
+        return {'type':'math','topic':'trigonometry','question':q,'answer':a}
+    if topic == 'slope':
+        q,a = gen_slope(grade)
+        return {'type':'math','topic':'slope','question':q,'answer':a}
+    if topic == 'matrices':
+        q,a = gen_matrices(grade)
+        return {'type':'math','topic':'matrices','question':q,'answer':a}
+    # fallback
+    q,a = gen_addition(10*grade)
+    return {'type':'math','topic':'addition','question':q,'answer':a}
 
 # -------------------------
-# Shape question generator & drawing
+# Shape generators (kept similar)
 # -------------------------
 
 def draw_shape_image(shape, params):
@@ -202,7 +353,6 @@ def generate_shape_question(grade):
         question = f"A triangle has base = {b} cm and height = {h} cm. What is its area?"
         answer = round(0.5*b*h,1)
         params = {'base_px': int(b*10), 'height_px': int(h*8)}
-    # create choices for shape questions
     choices = []
     if isinstance(answer, (int, float)):
         correct = answer
@@ -218,272 +368,280 @@ def generate_shape_question(grade):
     return {'type':'shape','shape':shape,'question':question,'answer':answer,'choices':choices,'image':img}
 
 # -------------------------
-# Hints (simple rule-based)
+# Lifecycle: start question, check answers
 # -------------------------
 
-def generate_hint(qdict):
-    if qdict['type'] == 'math':
-        topic = qdict.get('topic')
-        if topic == 'addition':
-            return 'Add the numbers from right to left. Carry if needed.'
-        if topic == 'subtraction':
-            return 'Subtract smaller from larger; borrow if necessary.'
-        if topic == 'multiplication':
-            return 'Try repeated addition or multiply digits.'
-        if topic == 'division':
-            return 'How many times does divisor go into dividend?'
-        if topic == 'fractions':
-            return 'Make denominators equal then add numerators.'
-        if topic == 'algebra':
-            return 'Isolate x by moving constants to the other side.'
-        if topic == 'area':
-            return 'Area of rectangle = length × width.'
-    elif qdict['type'] == 'shape':
-        if 'area' in qdict['question'].lower():
-            if 'triangle' in qdict['question'].lower():
-                return 'Area of triangle = 1/2 × base × height.'
-            return 'Multiply the dimensions to find area.'
-        if 'perimeter' in qdict['question'].lower():
-            return 'Perimeter is the sum of all side lengths.'
-        if 'circumference' in qdict['question'].lower():
-            return 'Circumference = 2 × π × r (use π≈3.14).'
-    return 'Try breaking the problem into smaller steps.'
-
-# -------------------------
-# Question lifecycle functions
-# -------------------------
-
-def start_new_question():
-    # create new question based on mode and grade
+def start_level_question():
+    # Guard: if level locked, do nothing
     grade = st.session_state.grade
+    level = st.session_state.current_level
+    if level > st.session_state.level_unlocked.get(grade,1):
+        return
+    # generate question according to mode
     if st.session_state.mode == 'Math Quiz':
-        q = generate_math_question(grade)
+        q = generate_math_question_for_grade(grade)
     else:
         q = generate_shape_question(grade)
     st.session_state.current_question = q
     st.session_state.current_answer = q['answer']
     st.session_state.current_choices = q.get('choices')
     st.session_state.question_start_time = time.time()
-    # clear user's input box
     st.session_state.user_answer = ''
 
 
-def is_correct(user_input):
-    correct = st.session_state.current_answer
-    try:
-        if isinstance(correct, str):
-            return str(user_input).strip() == str(correct).strip()
-        elif isinstance(correct, float):
-            val = float(user_input)
-            return abs(val - correct) <= 0.5
-        else:
-            val = float(user_input)
-            return abs(val - float(correct)) < 1e-6
-    except Exception:
-        return False
-
-
-def submit_answer():
-    # Called when user presses Enter in the text_input (on_change)
-    user_ans = st.session_state.user_answer
+def check_answer_auto():
     q = st.session_state.current_question
     if q is None:
         return
-    correct_flag = is_correct(user_ans)
+    user = st.session_state.user_answer
+    # increment question counter even if wrong
+    st.session_state.question_in_level += 1
+    correct_flag = False
+    try:
+        if isinstance(st.session_state.current_answer, str):
+            correct_flag = str(user).strip().lower() == str(st.session_state.current_answer).strip().lower()
+        elif isinstance(st.session_state.current_answer, float):
+            correct_flag = abs(float(user) - st.session_state.current_answer) <= 0.5
+        else:
+            correct_flag = abs(float(user) - float(st.session_state.current_answer)) < 1e-6
+    except Exception:
+        correct_flag = False
+
     if correct_flag:
+        st.session_state.correct_in_level += 1
         st.session_state.score += 10
-        st.session_state.consecutive_correct += 1
-        st.session_state.history.append({'question':q['question'],'correct':True,'given':user_ans})
-        st.success('Correct! 🎉')
+        st.success("Correct!")
     else:
-        # For shape MCQ answers we may not use this path - still record
-        st.session_state.consecutive_correct = 0
-        st.session_state.history.append({'question':q['question'],'correct':False,'given':user_ans})
         st.error(f"Incorrect. Correct answer: {st.session_state.current_answer}")
-        # track weak topic
-        if q.get('topic'):
-            st.session_state.weak_topics[q.get('topic')] = st.session_state.weak_topics.get(q.get('topic'),0)+1
-    # clear input after submit
+
+    st.session_state.history.append({'q':q['question'],'correct':correct_flag,'given':user})
     st.session_state.user_answer = ''
-    # level up check
-    if st.session_state.consecutive_correct >= 5:
-        st.session_state.level += 1
-        st.balloons()
-        st.success(f"Level up! You reached level {st.session_state.level} 🎉")
-        st.session_state.consecutive_correct = 0
-    # generate next question
-    start_new_question()
+
+    # after QUESTIONS_PER_LEVEL -> show result
+    if st.session_state.question_in_level >= QUESTIONS_PER_LEVEL:
+        show_level_result()
+    else:
+        start_level_question()
+        st.rerun()
+
+
+def submit_shape_choice():
+    choice = st.session_state.shape_choice
+    st.session_state.question_in_level += 1
+    correct_val = st.session_state.current_answer
+    user_val = None
+    try:
+        user_val = float(choice)
+    except Exception:
+        pass
+    ok = False
+    if isinstance(correct_val, float):
+        if user_val is not None and abs(user_val - correct_val) <= 0.5:
+            ok = True
+    else:
+        try:
+            ok = float(choice) == float(correct_val)
+        except Exception:
+            ok = False
+    if ok:
+        st.session_state.correct_in_level += 1
+        st.session_state.score += 10
+        st.success("Correct!")
+    else:
+        st.error(f"Wrong. Correct answer: {correct_val}")
+    st.session_state.history.append({'q':st.session_state.current_question['question'],'correct':ok,'given':choice})
+    st.session_state.shape_choice = None
+    if st.session_state.question_in_level >= QUESTIONS_PER_LEVEL:
+        show_level_result()
+    else:
+        start_level_question()
+        st.rerun()
+
+
+def show_level_result():
+    total = st.session_state.question_in_level
+    correct = st.session_state.correct_in_level
+    percent = int(correct/total*100) if total>0 else 0
+    passed = percent >= PASS_PERCENTAGE
+    st.session_state.last_result = {'total':total,'correct':correct,'percent':percent,'passed':passed}
+    # record progress
+    grade = st.session_state.grade
+    level = st.session_state.current_level
+    st.session_state.level_progress.setdefault(grade, {})[level] = {'passed':passed,'score':st.session_state.score,'percent':percent}
+    if passed:
+        # unlock next level if exists
+        if level < LEVELS_PER_GRADE:
+            st.session_state.level_unlocked[grade] = max(st.session_state.level_unlocked.get(grade,1), level+1)
+    # mark show flag
+    st.session_state.show_level_result = True
 
 # -------------------------
-# Sidebar: Player settings
+# Sidebar UI
 # -------------------------
 with st.sidebar:
     st.header("Player Setup")
-    # Grade selector - when changed, reset progress & generate new grade questions
-    new_grade = st.selectbox("Select Grade (3 - 10)", options=list(range(3, 11)), index=st.session_state.grade-3)
+    new_grade = st.selectbox("Select Grade (2 - 10)", options=list(range(2, 11)), index=st.session_state.grade-2)
     if new_grade != st.session_state.grade:
         st.session_state.grade = new_grade
-        st.session_state.level = 1
-        st.session_state.score = 0
-        st.session_state.question_index = 0
-        st.session_state.consecutive_correct = 0
+        # reset level counters for new grade view
+        st.session_state.current_level = 1
+        st.session_state.question_in_level = 0
+        st.session_state.correct_in_level = 0
         st.session_state.history = []
-        st.session_state.weak_topics = {}
-        start_new_question()
+        st.session_state.show_level_result = False
+        start_level_question()
+        st.rerun()
 
-    mode = st.radio("Choose Mode", options=["Math Quiz", "Shape Challenge"], index=0 if st.session_state.mode=='Math Quiz' else 1)
+    mode = st.radio("Mode", options=["Math Quiz","Shape Challenge"], index=0 if st.session_state.mode=='Math Quiz' else 1)
     st.session_state.mode = mode
 
     st.markdown("---")
-    st.write(f"**Current Grade:** {st.session_state.grade}")
-    st.write(f"**Mode:** {st.session_state.mode}")
-    st.write(f"**Level:** {st.session_state.level}")
-    st.write(f"**Score:** {st.session_state.score}")
-    st.write(f"**Consecutive Correct:** {st.session_state.consecutive_correct}")
+    st.write(f"**Progress for Grade {st.session_state.grade}:**")
+    prog = st.session_state.level_progress.get(st.session_state.grade, {})
+    passed_levels = sum(1 for v in prog.values() if v.get('passed'))
+    st.write(f"Levels passed: {passed_levels}/{LEVELS_PER_GRADE}")
+
+    st.write(f"Unlocked level: {st.session_state.level_unlocked.get(st.session_state.grade,1)}")
+    st.write(f"Current level: {st.session_state.current_level}")
+    st.write(f"Score: {st.session_state.score if 'score' in st.session_state else 0}")
 
     st.markdown("---")
-    st.write("Time limit per question (seconds)")
-    tlim = st.slider("Time limit", min_value=10, max_value=90, value=st.session_state.time_limit)
+    st.write("Settings")
+    tlim = st.slider("Time limit (seconds)", min_value=15, max_value=120, value=st.session_state.time_limit)
     st.session_state.time_limit = tlim
-
-    if st.button("Reset Progress"):
-        for k in ['score','level','question_index','started','history','current_question','current_answer','current_choices','question_start_time','consecutive_correct','weak_topics','user_answer']:
-            if k in st.session_state:
-                del st.session_state[k]
-        init_state()
-        start_new_question()
+    if st.button("Reset Grade Progress"):
+        st.session_state.level_progress[st.session_state.grade] = {}
+        st.session_state.level_unlocked[st.session_state.grade] = 1
+        st.session_state.current_level = 1
+        st.session_state.history = []
+        st.session_state.question_in_level = 0
+        st.session_state.correct_in_level = 0
+        st.session_state.show_level_result = False
+        start_level_question()
         st.rerun()
 
 # -------------------------
 # Main UI
 # -------------------------
-st.title("Math Hero 🦸‍♂️ — Learn. Play. Level Up.")
-st.markdown("<div style='background: linear-gradient(90deg,#A6C0FE,#F68084); padding:12px; border-radius:10px'>\
-<h3 style='color:white; margin:0'>Welcome to Math Hero!</h3>\
-<p style='color:#fff; margin:0'>Solve problems, identify shapes, and move through levels. Grades 3-10.</p></div>", unsafe_allow_html=True)
-st.write("\n")
-
-# Control buttons
-col1, col2, col3 = st.columns([1,1,1])
-with col1:
-    if st.button("Start Game ▶️"):
-        st.session_state.started = True
-        st.session_state.score = 0
-        st.session_state.level = 1
-        st.session_state.question_index = 0
-        st.session_state.consecutive_correct = 0
-        st.session_state.history = []
-        start_new_question()
-        st.rerun()
-with col2:
-    if st.button("Next Question ⏭️"):
-        start_new_question()
-        st.rerun()
-with col3:
-    if st.button("Give Hint 💡"):
-        if st.session_state.current_question:
-            st.info(generate_hint(st.session_state.current_question))
-
+st.title(APP_TITLE + " 🦸‍♂️")
+st.markdown("<div style='background: linear-gradient(90deg,#A6C0FE,#F68084); padding:10px; border-radius:8px'>\
+<h4 style='color:white; margin:0'>Learn, practice and level up! (Grades 2 - 10)</h4></div>", unsafe_allow_html=True)
 st.write("---")
 
+# Level selector and lock logic
+col1, col2 = st.columns([3,1])
+with col1:
+    lvl = st.number_input("Choose Level (locked until passed previous)", min_value=1, max_value=LEVELS_PER_GRADE, value=st.session_state.current_level, step=1)
+    lvl = int(lvl)
+    # lock check
+    if lvl > st.session_state.level_unlocked.get(st.session_state.grade,1):
+        st.warning(f"Level {lvl} is locked. Complete previous levels to unlock.")
+    else:
+        st.session_state.current_level = lvl
+with col2:
+    if st.button("Start Level"):
+        if st.session_state.current_level <= st.session_state.level_unlocked.get(st.session_state.grade,1):
+            st.session_state.started = True
+            st.session_state.question_in_level = 0
+            st.session_state.correct_in_level = 0
+            st.session_state.history = []
+            st.session_state.show_level_result = False
+            start_level_question()
+            st.rerun()
+        else:
+            st.error("This level is locked.")
+
+st.write(f"**Level {st.session_state.current_level} / {LEVELS_PER_GRADE}**")
+
+# If not started, show instructions
 if not st.session_state.started:
-    st.write("Press **Start Game** to begin. You can configure grade and time limit on the left.")
-    st.write("Features: level progression, shape visuals, timed questions, hints, and adaptive practice.")
-    st.write("Recommended: Start with Grade 3 and try a few rounds to see how leveling works.")
-    st.write("---")
-else:
+    st.info("Press Start Level to begin. You must get at least {}% to pass a level. Each level has {} questions.".format(PASS_PERCENTAGE, QUESTIONS_PER_LEVEL))
+    st.stop()
+
+# show current question number
+st.write(f"Question {st.session_state.question_in_level + 1} of {QUESTIONS_PER_LEVEL}")
+
+q = st.session_state.current_question
+if not q:
+    start_level_question()
     q = st.session_state.current_question
-    if not q:
-        start_new_question()
-        q = st.session_state.current_question
 
-    # show progress
-    st.progress(min(100, st.session_state.consecutive_correct * 20))
-    st.markdown(f"**Level:** {st.session_state.level} &nbsp;&nbsp; **Score:** {st.session_state.score}")
-
-    # Show question
-    if q['type'] == 'math':
-        st.subheader("Math Question")
-        st.write(f"**Topic:** {q.get('topic', 'General')}")
-        st.write(q['question'])
-
-        # show input with Enter-submit (on_change)
-        st.text_input(
-            "Your answer:",
-            key='user_answer',
-            on_change=submit_answer,
-            placeholder='Type your answer and press Enter'
-        )
-
-        # time left
-        elapsed = time.time() - st.session_state.question_start_time
-        remaining = max(0, int(st.session_state.time_limit - elapsed))
-        st.write(f"Time left: {remaining} seconds")
-        if remaining == 0:
-            st.warning("Time's up! Moving to next question.")
-            st.session_state.history.append({'question':q['question'],'correct':False,'given':None})
-            st.session_state.consecutive_correct = 0
-            start_new_question()
+if q['type'] == 'math':
+    st.subheader('Math')
+    st.write(f"Topic: {q.get('topic','')}")
+    st.write(q['question'])
+    # text input auto-submit with Enter
+    st.text_input('Your answer (press Enter to submit):', key='user_answer', on_change=check_answer_auto, placeholder='Type answer and press Enter')
+    # time left
+    elapsed = time.time() - st.session_state.question_start_time
+    remaining = max(0, int(st.session_state.time_limit - elapsed))
+    st.write(f"Time left: {remaining} seconds")
+    if remaining == 0:
+        st.warning("Time's up - moving to next question.")
+        # treat as wrong and advance
+        st.session_state.question_in_level += 1
+        st.session_state.history.append({'q':q['question'],'correct':False,'given':None})
+        if st.session_state.question_in_level >= QUESTIONS_PER_LEVEL:
+            show_level_result()
+        else:
+            start_level_question()
             st.rerun()
 
+else:
+    st.subheader('Shape Challenge')
+    buf = io.BytesIO()
+    q['image'].save(buf, format='PNG')
+    st.image(buf)
+    st.write(q['question'])
+    if q.get('choices'):
+        # use radio with on_change to auto-submit selection
+        st.radio('Choose answer:', options=[str(c) for c in q['choices']], key='shape_choice', on_change=submit_shape_choice)
     else:
-        st.subheader("Shape Challenge")
-        img = q['image']
-        buf = io.BytesIO()
-        img.save(buf, format='PNG')
-        st.image(buf)
-        st.write(q['question'])
-        choices = q.get('choices')
-        if choices:
-            # Show multiple choice options; clicking Submit button will check
-            choice = st.radio("Choose:", options=[str(c) for c in choices], key='shape_choice')
-            if st.button("Submit Shape Answer"):
-                try:
-                    user_val = float(choice)
-                except:
-                    user_val = None
-                correct_val = st.session_state.current_answer
-                ok = False
-                if isinstance(correct_val, float):
-                    if user_val is not None and abs(user_val - correct_val) <= 0.5:
-                        ok = True
-                else:
-                    if user_val == correct_val:
-                        ok = True
-                if ok:
-                    st.success("Correct! 🎉")
-                    st.session_state.score += 10
-                    st.session_state.consecutive_correct += 1
-                    st.session_state.history.append({'question':q['question'],'correct':True,'given':choice})
-                else:
-                    st.error(f"Wrong. Correct answer: {correct_val}")
-                    st.session_state.consecutive_correct = 0
-                    st.session_state.history.append({'question':q['question'],'correct':False,'given':choice})
-                if st.session_state.consecutive_correct >= 5:
-                    st.session_state.level += 1
-                    st.balloons()
-                    st.success(f"Level up! You reached level {st.session_state.level} 🎉")
-                    st.session_state.consecutive_correct = 0
-                start_new_question()
-                st.rerun()
-        else:
-            st.write("No multiple choices available for this question.")
+        st.write('No choices for this shape question.')
 
+# If level result ready show modal-like area
+if st.session_state.show_level_result:
+    res = st.session_state.last_result
     st.write('---')
-    st.subheader('Session Summary')
-    st.write(f"Total Score: {st.session_state.score}")
-    st.write(f"Questions attempted: {len(st.session_state.history)}")
-    if st.session_state.history:
-        last = st.session_state.history[-5:]
-        for i, h in enumerate(last[::-1],1):
-            st.write(f"{i}. {h['question']} — {'✅' if h['correct'] else '❌'} (You: {h['given']})")
-    if st.session_state.weak_topics:
-        st.markdown('**Weak topics (more practice needed):**')
-        sorted_weak = sorted(st.session_state.weak_topics.items(), key=lambda x: -x[1])
-        for t, cnt in sorted_weak:
-            if cnt>0:
-                st.write(f"- {t}: {cnt} mistakes")
+    if res['passed']:
+        st.balloons()
+        st.success(f"Level Passed! Score: {res['correct']}/{res['total']} ({res['percent']}%)")
+    else:
+        st.error(f"Level Failed. Score: {res['correct']}/{res['total']} ({res['percent']}%). Try again to unlock next level.")
+    st.markdown("**Level Summary:**")
+    st.write(f"Correct: {res['correct']}")
+    st.write(f"Total: {res['total']}")
+    st.write(f"Percentage: {res['percent']}%")
+    # offer retry or continue (if passed)
+    colA, colB = st.columns(2)
+    with colA:
+        if st.button('Retry Level'):
+            st.session_state.question_in_level = 0
+            st.session_state.correct_in_level = 0
+            st.session_state.history = []
+            st.session_state.show_level_result = False
+            start_level_question()
+            st.rerun()
+    with colB:
+        if res['passed']:
+            if st.button('Go to Next Level'):
+                if st.session_state.current_level < LEVELS_PER_GRADE:
+                    st.session_state.current_level += 1
+                    st.session_state.question_in_level = 0
+                    st.session_state.correct_in_level = 0
+                    st.session_state.history = []
+                    st.session_state.show_level_result = False
+                    start_level_question()
+                    st.rerun()
+                else:
+                    st.success('You completed all levels for this grade! Well done!')
 
-# Footer
+# show small history
 st.write('---')
-st.caption('Math Hero — Updated Prototype: Enter submits answer, input clears, grade change resets questions, and uses Streamlit stable APIs.')
+st.subheader('Recent Questions')
+for h in st.session_state.history[-5:][::-1]:
+    st.write(f"- {h['q']} — {'✅' if h['correct'] else '❌'} (You: {h['given']})")
+
+# footer
+st.write('---')
+st.caption('Math Hero v3 — Levels, locks, grade-wise topics, and Enter-to-submit implemented. Save progress by exporting level_progress if needed.')
