@@ -410,7 +410,8 @@ else:
                 st.success(f"Level up! You reached level {st.session_state.level} 🎉")
                 st.session_state.consecutive_correct = 0
             start_new_question()
-            st.experimental_rerun()
+            st.rerun()
+
 
     else:  # shape
         st.subheader("Shape Challenge")
