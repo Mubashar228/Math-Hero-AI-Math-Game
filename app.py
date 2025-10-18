@@ -316,7 +316,7 @@ with st.sidebar:
             if k in st.session_state:
                 del st.session_state[k]
         init_state()
-        st.experimental_rerun()
+        st.rerun()
 
 # -------------------------
 # Main UI
