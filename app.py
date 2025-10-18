@@ -384,7 +384,8 @@ else:
             st.session_state.history.append({'question':q['question'],'correct':False,'given':None})
             st.session_state.consecutive_correct = 0
             start_new_question()
-            st.experimental_rerun()
+            st.rerun()
+
         if st.button("Submit Answer"):
             correct = check_answer(ans)
             if correct:
