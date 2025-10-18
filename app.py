@@ -345,7 +345,7 @@ with col1:
 with col2:
     if st.button("Next Question ⏭️"):
         start_new_question()
-        st.experimental_rerun()
+        st.rerun()
 with col3:
     if st.button("Give Hint 💡"):
         if st.session_state.current_question:
