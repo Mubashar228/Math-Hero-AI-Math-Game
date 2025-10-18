@@ -407,7 +407,8 @@ def start_level_question():
     st.session_state.current_answer = q['answer']
     st.session_state.current_choices = q.get('choices')
     st.session_state.question_start_time = time.time()
-    st.session_state.user_answer = ''
+    st.session_state.update({"user_answer": ""})
+
 
 
 def check_answer_auto():
