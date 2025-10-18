@@ -340,7 +340,8 @@ with col1:
         st.session_state.consecutive_correct = 0
         st.session_state.history = []
         start_new_question()
-        st.experimental_rerun()
+        st.rerun()
+
 with col2:
     if st.button("Next Question ⏭️"):
         start_new_question()
