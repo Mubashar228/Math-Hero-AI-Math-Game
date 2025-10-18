@@ -326,8 +326,8 @@ st.markdown("<div style='background: linear-gradient(90deg,#A6C0FE,#F68084); pad
 <h3 style='color:white; margin:0'>Welcome to Math Hero!</h3>\
 <p style='color:#fff; margin:0'>Solve problems, identify shapes, and move through levels. Grades 3-10.</p></div>", unsafe_allow_html=True)
 
-st.write("
-")
+st.write("\n")
+
 
 # Controls: Start / Next / Hint
 col1, col2, col3 = st.columns([1,1,1])
