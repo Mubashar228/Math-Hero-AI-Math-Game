@@ -1,11 +1,11 @@
-# Math Hero - Streamlit Complete Prototype
+# Math Hero - Streamlit Complete Prototype (Updated)
 # File: math_hero_streamlit_full.py
 # Run: streamlit run math_hero_streamlit_full.py
 
 import streamlit as st
 import random
 import time
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import io
 import math
 
@@ -20,7 +20,7 @@ st.set_page_config(
 )
 
 # -------------------------
-# Helpers: session state init
+# Session state initialization
 # -------------------------
 
 def init_state():
@@ -38,7 +38,8 @@ def init_state():
         'question_start_time': None,
         'time_limit': 30,  # seconds per question
         'consecutive_correct': 0,
-        'weak_topics': {},  # track topic errors
+        'weak_topics': {},
+        'user_answer': '',
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -47,28 +48,28 @@ def init_state():
 init_state()
 
 # -------------------------
-# Utility: simple math question generators by topic
+# Question generators
 # -------------------------
 
 def gen_addition(grade):
     a = random.randint(1, 10 * grade)
     b = random.randint(1, 10 * grade)
     q = f"{a} + {b} = ?"
-    return q, a + b, None
+    return q, a + b
 
 
 def gen_subtraction(grade):
     a = random.randint(1, 10 * grade)
     b = random.randint(1, a)
     q = f"{a} - {b} = ?"
-    return q, a - b, None
+    return q, a - b
 
 
 def gen_multiplication(grade):
-    a = random.randint(1, grade + 5)
+    a = random.randint(1, max(3, grade + 2))
     b = random.randint(1, 12)
     q = f"{a} × {b} = ?"
-    return q, a * b, None
+    return q, a * b
 
 
 def gen_division(grade):
@@ -76,17 +77,24 @@ def gen_division(grade):
     c = random.randint(1, 12)
     a = b * c
     q = f"{a} ÷ {b} = ?"
-    return q, c, None
+    return q, c
 
 
 def gen_fraction_add(grade):
-    # simple fraction addition with same denominator
     d = random.choice([2,3,4,5,6])
     a = random.randint(1, d-1)
     b = random.randint(1, d-1)
     numerator = a + b
-    q = f"{a}/{d} + {b}/{d} = ? (Answer as fraction simplified)"
-    return q, f"{numerator}/{d}", None
+    # simplify fraction
+    def gcd(x,y):
+        while y:
+            x,y = y, x%y
+        return x
+    g = gcd(numerator, d)
+    simp_num = numerator//g
+    simp_den = d//g
+    q = f"{a}/{d} + {b}/{d} = ? (simplified)"
+    return q, f"{simp_num}/{simp_den}"
 
 
 def gen_algebra_linear(grade):
@@ -95,18 +103,17 @@ def gen_algebra_linear(grade):
     c = random.randint(0, 10)
     a = m * x + c
     q = f"Solve for x: {m}x + {c} = {a}"
-    return q, x, None
+    return q, x
 
 
 def gen_area_rectangle(grade):
     l = random.randint(1, 10 + grade)
     w = random.randint(1, 10 + grade)
     q = f"Area of rectangle with length {l} and width {w} = ?"
-    return q, l*w, None
+    return q, l*w
 
 
 def choose_math_topic(grade):
-    # choose topics based on grade
     if grade <= 4:
         topics = ['addition','subtraction','multiplication']
     elif grade <= 6:
@@ -121,137 +128,129 @@ def choose_math_topic(grade):
 def generate_math_question(grade):
     topic = choose_math_topic(grade)
     if topic == 'addition':
-        q, ans, meta = gen_addition(grade)
+        q, ans = gen_addition(grade)
     elif topic == 'subtraction':
-        q, ans, meta = gen_subtraction(grade)
+        q, ans = gen_subtraction(grade)
     elif topic == 'multiplication':
-        q, ans, meta = gen_multiplication(grade)
+        q, ans = gen_multiplication(grade)
     elif topic == 'division':
-        q, ans, meta = gen_division(grade)
+        q, ans = gen_division(grade)
     elif topic == 'fractions':
-        q, ans, meta = gen_fraction_add(grade)
+        q, ans = gen_fraction_add(grade)
     elif topic == 'algebra':
-        q, ans, meta = gen_algebra_linear(grade)
+        q, ans = gen_algebra_linear(grade)
     elif topic == 'area':
-        q, ans, meta = gen_area_rectangle(grade)
+        q, ans = gen_area_rectangle(grade)
     else:
-        q, ans, meta = gen_addition(grade)
-    return {'type':'math','topic':topic,'question':q,'answer':ans,'meta':meta}
+        q, ans = gen_addition(grade)
+    return {'type':'math','topic':topic,'question':q,'answer':ans}
 
 # -------------------------
-# Shape challenge generator (draw with PIL)
+# Shape question generator & drawing
 # -------------------------
 
 def draw_shape_image(shape, params):
     size = 300
     img = Image.new('RGB', (size, size), color=(255,255,255))
     draw = ImageDraw.Draw(img)
-    margin = 30
     if shape == 'square':
-        s = params.get('side', 100)
+        s = params.get('side_px', 120)
         x0 = (size - s)//2
         y0 = (size - s)//2
         draw.rectangle([x0,y0,x0+s,y0+s], outline='black', width=4)
     elif shape == 'rectangle':
-        l = params.get('length', 160)
-        w = params.get('width', 100)
+        l = params.get('length_px', 160)
+        w = params.get('width_px', 100)
         x0 = (size - l)//2
         y0 = (size - w)//2
         draw.rectangle([x0,y0,x0+l,y0+w], outline='black', width=4)
     elif shape == 'circle':
-        r = params.get('radius', 70)
+        r = params.get('radius_px', 70)
         cx, cy = size//2, size//2
         draw.ellipse([cx-r,cy-r,cx+r,cy+r], outline='black', width=4)
     elif shape == 'triangle':
-        base = params.get('base', 160)
-        h = params.get('height', 120)
+        base = params.get('base_px', 160)
+        h = params.get('height_px', 120)
         cx = size//2
         points = [(cx, (size-h)//2), (cx-base//2, (size+h)//2), (cx+base//2, (size+h)//2)]
         draw.polygon(points, outline='black')
-    else:
-        draw.text((20,20), 'Unknown shape', fill='black')
     return img
 
 
 def generate_shape_question(grade):
-    # select a shape based on grade
     shapes = ['square','rectangle','circle','triangle']
     shape = random.choice(shapes)
     if shape == 'square':
         side = random.randint(3 + grade, 6 + grade)
         question = f"A square has side = {side} cm. What is its area?"
         answer = side*side
-        params = {'side': int(side*15/ (6+grade) * 6) if grade<6 else side*10}
+        params = {'side_px': int(side*6)}
     elif shape == 'rectangle':
         l = random.randint(4+grade, 8+grade)
         w = random.randint(2+grade, 5+grade)
         question = f"A rectangle has length = {l} cm and width = {w} cm. What is its perimeter?"
         answer = 2*(l+w)
-        params = {'length': int(l*10), 'width': int(w*8)}
+        params = {'length_px': int(l*10), 'width_px': int(w*8)}
     elif shape == 'circle':
         r = random.randint(3+grade, 6+grade)
         question = f"A circle has radius = {r} cm. Approximate circumference (use π≈3.14)."
         answer = round(2*3.14*r,1)
-        params = {'radius': int(r*6)}
+        params = {'radius_px': int(r*6)}
     elif shape == 'triangle':
         b = random.randint(4+grade, 8+grade)
         h = random.randint(3+grade, 7+grade)
         question = f"A triangle has base = {b} cm and height = {h} cm. What is its area?"
         answer = round(0.5*b*h,1)
-        params = {'base': int(b*10), 'height': int(h*8)}
-    # create choices (4 options)
+        params = {'base_px': int(b*10), 'height_px': int(h*8)}
+    # create choices for shape questions
     choices = []
     if isinstance(answer, (int, float)):
         correct = answer
         choices.append(correct)
         for _ in range(3):
-            # nearby wrong answers
-            delta = random.randint(1, max(2, int(abs(correct)*0.2)+1))
-            wrong = correct + random.choice([-1,1])*delta*random.randint(1,3)
-            if isinstance(correct,float):
+            delta = max(1, int(abs(correct)*0.15))
+            wrong = correct + random.choice([-1,1])*random.randint(1, delta+3)
+            if isinstance(correct, float):
                 wrong = round(wrong,1)
             choices.append(wrong)
         random.shuffle(choices)
-    else:
-        choices = None
     img = draw_shape_image(shape, params)
     return {'type':'shape','shape':shape,'question':question,'answer':answer,'choices':choices,'image':img}
 
 # -------------------------
-# Hints generator (simple rule-based)
+# Hints (simple rule-based)
 # -------------------------
 
 def generate_hint(qdict):
     if qdict['type'] == 'math':
         topic = qdict.get('topic')
         if topic == 'addition':
-            return 'Try adding units first, then tens. Use carry if needed.'
+            return 'Add the numbers from right to left. Carry if needed.'
         if topic == 'subtraction':
-            return 'Try subtracting smaller digit from larger; borrow if necessary.'
+            return 'Subtract smaller from larger; borrow if necessary.'
         if topic == 'multiplication':
-            return 'Multiply one number by each digit of the other, or use repeated addition.'
+            return 'Try repeated addition or multiply digits.'
         if topic == 'division':
-            return 'Think how many times divisor fits into dividend.'
+            return 'How many times does divisor go into dividend?'
         if topic == 'fractions':
-            return 'Make denominators same, add numerators.'
+            return 'Make denominators equal then add numerators.'
         if topic == 'algebra':
-            return 'Isolate x: subtract constant then divide by coefficient.'
+            return 'Isolate x by moving constants to the other side.'
         if topic == 'area':
-            return 'Area = length × width (for rectangle).'
+            return 'Area of rectangle = length × width.'
     elif qdict['type'] == 'shape':
         if 'area' in qdict['question'].lower():
             if 'triangle' in qdict['question'].lower():
                 return 'Area of triangle = 1/2 × base × height.'
-            else:
-                return 'Multiply dimensions for area (or use π for circles).'
+            return 'Multiply the dimensions to find area.'
         if 'perimeter' in qdict['question'].lower():
-            return 'Perimeter is sum of all sides.'
+            return 'Perimeter is the sum of all side lengths.'
         if 'circumference' in qdict['question'].lower():
-            return 'Use circumference = 2 × π × r (π≈3.14).'
-    return 'Try to break the problem into smaller steps.'
+            return 'Circumference = 2 × π × r (use π≈3.14).'
+    return 'Try breaking the problem into smaller steps.'
 
 # -------------------------
-# Question lifecycle
+# Question lifecycle functions
 # -------------------------
 
 def start_new_question():
@@ -263,38 +262,74 @@ def start_new_question():
         q = generate_shape_question(grade)
     st.session_state.current_question = q
     st.session_state.current_answer = q['answer']
-    if q['type'] == 'shape':
-        st.session_state.current_choices = q['choices']
-    else:
-        st.session_state.current_choices = None
+    st.session_state.current_choices = q.get('choices')
     st.session_state.question_start_time = time.time()
+    # clear user's input box
+    st.session_state.user_answer = ''
 
 
-def check_answer(user_input):
-    q = st.session_state.current_question
+def is_correct(user_input):
     correct = st.session_state.current_answer
-    topic = q.get('topic', q.get('shape'))
-    # convert user_input if numeric
     try:
         if isinstance(correct, str):
-            is_correct = str(user_input).strip() == str(correct).strip()
+            return str(user_input).strip() == str(correct).strip()
         elif isinstance(correct, float):
             val = float(user_input)
-            is_correct = abs(val - correct) <= 0.5
+            return abs(val - correct) <= 0.5
         else:
             val = float(user_input)
-            is_correct = abs(val - float(correct)) < 1e-6
+            return abs(val - float(correct)) < 1e-6
     except Exception:
-        is_correct = False
-    return is_correct
+        return False
+
+
+def submit_answer():
+    # Called when user presses Enter in the text_input (on_change)
+    user_ans = st.session_state.user_answer
+    q = st.session_state.current_question
+    if q is None:
+        return
+    correct_flag = is_correct(user_ans)
+    if correct_flag:
+        st.session_state.score += 10
+        st.session_state.consecutive_correct += 1
+        st.session_state.history.append({'question':q['question'],'correct':True,'given':user_ans})
+        st.success('Correct! 🎉')
+    else:
+        # For shape MCQ answers we may not use this path - still record
+        st.session_state.consecutive_correct = 0
+        st.session_state.history.append({'question':q['question'],'correct':False,'given':user_ans})
+        st.error(f"Incorrect. Correct answer: {st.session_state.current_answer}")
+        # track weak topic
+        if q.get('topic'):
+            st.session_state.weak_topics[q.get('topic')] = st.session_state.weak_topics.get(q.get('topic'),0)+1
+    # clear input after submit
+    st.session_state.user_answer = ''
+    # level up check
+    if st.session_state.consecutive_correct >= 5:
+        st.session_state.level += 1
+        st.balloons()
+        st.success(f"Level up! You reached level {st.session_state.level} 🎉")
+        st.session_state.consecutive_correct = 0
+    # generate next question
+    start_new_question()
 
 # -------------------------
-# UI: Sidebar settings
+# Sidebar: Player settings
 # -------------------------
 with st.sidebar:
     st.header("Player Setup")
-    grade = st.selectbox("Select Grade (3 - 10)", options=list(range(3, 11)), index=st.session_state.grade-3)
-    st.session_state.grade = grade
+    # Grade selector - when changed, reset progress & generate new grade questions
+    new_grade = st.selectbox("Select Grade (3 - 10)", options=list(range(3, 11)), index=st.session_state.grade-3)
+    if new_grade != st.session_state.grade:
+        st.session_state.grade = new_grade
+        st.session_state.level = 1
+        st.session_state.score = 0
+        st.session_state.question_index = 0
+        st.session_state.consecutive_correct = 0
+        st.session_state.history = []
+        st.session_state.weak_topics = {}
+        start_new_question()
 
     mode = st.radio("Choose Mode", options=["Math Quiz", "Shape Challenge"], index=0 if st.session_state.mode=='Math Quiz' else 1)
     st.session_state.mode = mode
@@ -312,10 +347,11 @@ with st.sidebar:
     st.session_state.time_limit = tlim
 
     if st.button("Reset Progress"):
-        for k in ['score','level','question_index','started','history','current_question','current_answer','current_choices','question_start_time','consecutive_correct','weak_topics']:
+        for k in ['score','level','question_index','started','history','current_question','current_answer','current_choices','question_start_time','consecutive_correct','weak_topics','user_answer']:
             if k in st.session_state:
                 del st.session_state[k]
         init_state()
+        start_new_question()
         st.rerun()
 
 # -------------------------
@@ -325,11 +361,9 @@ st.title("Math Hero 🦸‍♂️ — Learn. Play. Level Up.")
 st.markdown("<div style='background: linear-gradient(90deg,#A6C0FE,#F68084); padding:12px; border-radius:10px'>\
 <h3 style='color:white; margin:0'>Welcome to Math Hero!</h3>\
 <p style='color:#fff; margin:0'>Solve problems, identify shapes, and move through levels. Grades 3-10.</p></div>", unsafe_allow_html=True)
-
 st.write("\n")
 
-
-# Controls: Start / Next / Hint
+# Control buttons
 col1, col2, col3 = st.columns([1,1,1])
 with col1:
     if st.button("Start Game ▶️"):
@@ -341,7 +375,6 @@ with col1:
         st.session_state.history = []
         start_new_question()
         st.rerun()
-
 with col2:
     if st.button("Next Question ⏭️"):
         start_new_question()
@@ -368,81 +401,64 @@ else:
     st.progress(min(100, st.session_state.consecutive_correct * 20))
     st.markdown(f"**Level:** {st.session_state.level} &nbsp;&nbsp; **Score:** {st.session_state.score}")
 
-    # show question depending on type
+    # Show question
     if q['type'] == 'math':
         st.subheader("Math Question")
         st.write(f"**Topic:** {q.get('topic', 'General')}")
         st.write(q['question'])
-        # show input
-        ans = st.text_input("Your answer", key='answer_input')
-        # show elapsed time
+
+        # show input with Enter-submit (on_change)
+        st.text_input(
+            "Your answer:",
+            key='user_answer',
+            on_change=submit_answer,
+            placeholder='Type your answer and press Enter'
+        )
+
+        # time left
         elapsed = time.time() - st.session_state.question_start_time
         remaining = max(0, int(st.session_state.time_limit - elapsed))
         st.write(f"Time left: {remaining} seconds")
         if remaining == 0:
-            st.warning("Time's up! Try the next question.")
+            st.warning("Time's up! Moving to next question.")
             st.session_state.history.append({'question':q['question'],'correct':False,'given':None})
             st.session_state.consecutive_correct = 0
             start_new_question()
             st.rerun()
 
-        if st.button("Submit Answer"):
-            correct = check_answer(ans)
-            if correct:
-                st.success("Correct! 🎉")
-                st.session_state.score += 10
-                st.session_state.consecutive_correct += 1
-                st.session_state.history.append({'question':q['question'],'correct':True,'given':ans})
-                # update weak topics
-                topic = q.get('topic')
-                if topic and topic in st.session_state.weak_topics:
-                    st.session_state.weak_topics[topic] = max(0, st.session_state.weak_topics[topic]-1)
-            else:
-                st.error(f"Not quite. The correct answer was: {st.session_state.current_answer}")
-                st.session_state.consecutive_correct = 0
-                st.session_state.history.append({'question':q['question'],'correct':False,'given':ans})
-                topic = q.get('topic')
-                if topic:
-                    st.session_state.weak_topics[topic] = st.session_state.weak_topics.get(topic,0)+1
-            # level up condition
-            if st.session_state.consecutive_correct >= 5:
-                st.session_state.level += 1
-                st.balloons()
-                st.success(f"Level up! You reached level {st.session_state.level} 🎉")
-                st.session_state.consecutive_correct = 0
-            start_new_question()
-            st.rerun()
-
-
-    else:  # shape
+    else:
         st.subheader("Shape Challenge")
         img = q['image']
         buf = io.BytesIO()
         img.save(buf, format='PNG')
         st.image(buf)
         st.write(q['question'])
-        choices = q['choices']
+        choices = q.get('choices')
         if choices:
+            # Show multiple choice options; clicking Submit button will check
             choice = st.radio("Choose:", options=[str(c) for c in choices], key='shape_choice')
             if st.button("Submit Shape Answer"):
-                correct_val = st.session_state.current_answer
                 try:
                     user_val = float(choice)
                 except:
                     user_val = None
+                correct_val = st.session_state.current_answer
+                ok = False
                 if isinstance(correct_val, float):
-                    ok = abs(user_val - correct_val) <= 0.5
+                    if user_val is not None and abs(user_val - correct_val) <= 0.5:
+                        ok = True
                 else:
-                    ok = user_val == correct_val
+                    if user_val == correct_val:
+                        ok = True
                 if ok:
                     st.success("Correct! 🎉")
                     st.session_state.score += 10
                     st.session_state.consecutive_correct += 1
+                    st.session_state.history.append({'question':q['question'],'correct':True,'given':choice})
                 else:
                     st.error(f"Wrong. Correct answer: {correct_val}")
                     st.session_state.consecutive_correct = 0
-                # record
-                st.session_state.history.append({'question':q['question'],'correct':ok,'given':choice})
+                    st.session_state.history.append({'question':q['question'],'correct':False,'given':choice})
                 if st.session_state.consecutive_correct >= 5:
                     st.session_state.level += 1
                     st.balloons()
@@ -468,6 +484,6 @@ else:
             if cnt>0:
                 st.write(f"- {t}: {cnt} mistakes")
 
-# Footer notes
+# Footer
 st.write('---')
-st.caption('Math Hero — Prototype. Next steps: add persistent leaderboard, audio feedback, and LLM hints.')
+st.caption('Math Hero — Updated Prototype: Enter submits answer, input clears, grade change resets questions, and uses Streamlit stable APIs.')
