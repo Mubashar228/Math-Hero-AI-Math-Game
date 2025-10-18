@@ -7,6 +7,27 @@ import random
 import time
 from PIL import Image, ImageDraw
 import io
+# -----------------------------
+# Initialize session variables
+# -----------------------------
+default_states = {
+    "score": 0,
+    "correct_count": 0,
+    "current_question_num": 0,
+    "level_unlocked": 1,
+    "level_progress": {},
+    "selected_mode": "Math Quiz",
+    "question": "",
+    "answer": "",
+    "grade": 2,
+    "level": 1,
+    "user_answer": "",
+}
+
+for key, val in default_states.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
+
 
 # -------------------------
 # Config
