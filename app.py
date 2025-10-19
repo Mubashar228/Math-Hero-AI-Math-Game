@@ -327,6 +327,15 @@ def gen_shape_question(grade):
 # ---------------------------
 # Topic chooser per grade
 # ---------------------------
+# 🟩 Function to generate rectangle perimeter questions
+def gen_perimeter_rectangle(grade):
+    import random
+    length = random.randint(2, 20)
+    width = random.randint(2, 20)
+    question = f"Find the perimeter of a rectangle with length {length} cm and width {width} cm."
+    answer = 2 * (length + width)
+    return question, answer
+
 
 def choose_topic(grade):
     if grade <= 4:
