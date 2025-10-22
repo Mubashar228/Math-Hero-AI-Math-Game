@@ -1,15 +1,12 @@
-# math_hero_v6.py
+# math_hero_v7.py
 """
-Math Hero v6 — Full production-ready Streamlit app
+Math Hero v7 — Gamified AI Math Challenge (complete)
 - Grades 2-10, 20 levels per grade, 10 questions per level
 - Math Quiz + Shape Challenge
-- Fixes: shape radio auto-select bug solved (placeholder + unique key + explicit submit)
-- Safe session_state updates and no NameError
-- Save/Load progress, leaderboard, weak-topic tracking, hints, shapes drawn with PIL
-
-Run:
-    pip install streamlit pillow
-    streamlit run math_hero_v6.py
+- Grade 4-5 extra topics: Factors & Multiples, Decimals, Time Measurement
+- Detailed per-question results saved and appended to CSV leaderboard
+- Enter-to-submit for text answers; radio + Submit for shape answers (placeholder + unique key)
+- Save/Load progress (JSON) + export leaderboard CSV
 """
 
 import streamlit as st
@@ -22,22 +19,23 @@ import time
 from PIL import Image, ImageDraw
 import io
 from datetime import datetime
+import pandas as pd
 
 # ---------------------------
-# App configuration
+# Config
 # ---------------------------
-APP_TITLE = "Math Hero v6 — Gamified AI Math Challenge"
+APP_TITLE = "Math Hero v7 — Gamified AI Math Challenge"
 PAGE_ICON = "🦸‍♂️"
 LEVELS_PER_GRADE = 20
 QUESTIONS_PER_LEVEL = 10
-PASS_PERCENT = 70  # percent to pass a level
-SAVE_FILE = "math_hero_progress_v6.json"
-LEADERBOARD_FILE = "math_hero_leaderboard_v6.csv"
+PASS_PERCENT = 70
+SAVE_FILE = "math_hero_progress_v7.json"
+LEADERBOARD_FILE = "math_hero_leaderboard_v7.csv"
 
 st.set_page_config(page_title=APP_TITLE, page_icon=PAGE_ICON, layout="wide")
 
 # ---------------------------
-# Utilities: persistence
+# Utilities: persistence & leaderboard append
 # ---------------------------
 def load_progress(path=SAVE_FILE):
     if os.path.exists(path):
@@ -56,34 +54,40 @@ def save_progress(data, path=SAVE_FILE):
     except Exception:
         return False
 
-def append_leaderboard_row(row, path=LEADERBOARD_FILE):
-    header = ["timestamp","player","grade","level","score","percent"]
+def append_leaderboard_rows(rows, path=LEADERBOARD_FILE):
+    """
+    rows: list of dicts with columns:
+    timestamp, player, grade, level, q_no, question, given, correct_answer, is_correct, time_taken, percent_level
+    """
+    fieldnames = ["timestamp","player","grade","level","q_no","question","given","correct_answer","is_correct","time_taken","percent_level"]
     first = not os.path.exists(path)
     try:
         with open(path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             if first:
-                writer.writerow(header)
-            writer.writerow(row)
+                writer.writeheader()
+            for r in rows:
+                writer.writerow(r)
         return True
-    except Exception:
+    except Exception as e:
+        print("Leaderboard append error:", e)
         return False
 
 # ---------------------------
-# session state defaults
+# Session state init
 # ---------------------------
 def init_state():
     defaults = {
         "player": "Player",
         "grade": 5,
-        "mode": "Math Quiz",  # or "Shape Challenge"
+        "mode": "Math Quiz",
         "current_level": 1,
         "level_unlocked": {g:1 for g in range(2,11)},
         "level_progress": {str(g):{} for g in range(2,11)},
         "started": False,
         "question_in_level": 0,
         "correct_in_level": 0,
-        "current_q": None,     # dict with question
+        "current_q": None,
         "current_ans": None,
         "current_choices": None,
         "question_start_time": None,
@@ -93,9 +97,11 @@ def init_state():
         "weak_topics": {},
         "show_result": False,
         "last_result": None,
-        "ui_input": "",        # used for text_input key
+        "ui_input": "",
         "shape_choice_key": None,
-        "auto_clear_flag": False
+        "auto_clear_flag": False,
+        # per-level detailed question list (list of dicts)
+        "level_results": []
     }
     for k,v in defaults.items():
         if k not in st.session_state:
@@ -103,21 +109,17 @@ def init_state():
 
 init_state()
 
-# Load stored progress (if any)
-progress_store = load_progress()
-if progress_store:
-    # only load if state still default/empty
-    if not any(progress_store.get("level_progress", {})):
-        st.session_state["level_progress"] = progress_store.get("level_progress", st.session_state["level_progress"])
-        st.session_state["level_unlocked"] = progress_store.get("level_unlocked", st.session_state["level_unlocked"])
+# Load saved progress if present (merge safely)
+_progress_store = load_progress()
+if _progress_store:
+    # merge only if keys present — keep current session_state values where present
+    st.session_state["level_progress"] = _progress_store.get("level_progress", st.session_state["level_progress"])
+    st.session_state["level_unlocked"] = _progress_store.get("level_unlocked", st.session_state["level_unlocked"])
 
 # ---------------------------
-# Question Generators
-# Each function returns (question_text, answer)
-# For fraction answers sometimes return dict {'fraction':..., 'decimal':...}
+# Question generators
 # ---------------------------
-
-# --- Grade 2-4 basic
+# Basic operations (grades 2-4)
 def gen_addition(grade):
     a = random.randint(1, 10*grade)
     b = random.randint(1, 10*grade)
@@ -150,7 +152,7 @@ def gen_simple_story(grade):
     b = random.randint(1, 10)
     return f"Ali had {a} apples. He gave {b} to Ahmed. How many left?", a - b
 
-# --- Grades 5-8 intermediate
+# Fractions & related
 def gen_fractions_add(grade):
     d = random.randint(2,8)
     a = random.randint(1, d-1)
@@ -160,7 +162,7 @@ def gen_fractions_add(grade):
     g = math.gcd(num, den)
     frac_s = f"{num//g}/{den//g}"
     dec = round(num/den, 3)
-    return f"{a}/{d} + {b}/{d} = ? (answer as fraction or decimal)", {"fraction":frac_s, "decimal":dec}
+    return f"{a}/{d} + {b}/{d} = ? (fraction or decimal)", {"fraction":frac_s, "decimal":dec}
 
 def gen_fraction_to_mixed(grade):
     num = random.randint(5, 20)
@@ -172,6 +174,7 @@ def gen_fraction_to_mixed(grade):
     else:
         return f"Write {num}/{den} as a mixed number.", f"{whole} {rem}/{den}"
 
+# LCM/HCF
 def gen_lcm(grade):
     a = random.randint(2,20)
     b = random.randint(2,20)
@@ -182,6 +185,7 @@ def gen_hcf(grade):
     b = random.randint(2,50)
     return f"Find HCF (GCD) of {a} and {b}.", math.gcd(a,b)
 
+# Percent/profit/area
 def gen_percentage(grade):
     base = random.randint(10,200)
     pct = random.choice([5,10,15,20,25])
@@ -203,7 +207,7 @@ def gen_perimeter_rectangle(grade):
     w = random.randint(1,15)
     return f"Perimeter of rectangle length={l} and width={w} = ?", 2*(l+w)
 
-# --- Grades 9-10 advanced
+# Advanced grade 9-10
 def gen_function_eval(grade):
     a = random.randint(1,5)
     b = random.randint(0,10)
@@ -234,6 +238,79 @@ def gen_matrix_add(grade):
     q = f"Add matrices [[{a},{b}],[{c},{d}]] + [[{e},{f_}],[{g},{h}]]. Write result [[x,y],[z,w]]."
     ans = f"[[{a+e},{b+f_}],[{c+g},{d+h}]]"
     return q, ans
+
+# ---------------------------
+# New Grade 4-5 generators: Factors & Multiples, Decimals, Time Measurement
+# ---------------------------
+def gen_factors_multiples(grade):
+    kind = random.choice(['factor_check','common_multiple','gcf_simple'])
+    if kind == 'factor_check':
+        base = random.randint(2, 12)
+        multiple = base * random.randint(2,6)
+        q = f"Is {base} a factor of {multiple}? Answer 'yes' or 'no'."
+        ans = 'yes'
+        return q, ans
+    elif kind == 'common_multiple':
+        a = random.randint(2, 8)
+        b = random.randint(2, 8)
+        # find a small common multiple
+        m = a
+        while m % b != 0:
+            m += a
+        q = f"Find a common multiple of {a} and {b} (small)."
+        return q, m
+    else:
+        a = random.randint(2, 12)
+        b = random.randint(2, 12)
+        g = math.gcd(a,b)
+        q = f"Find the GCF (HCF) of {a} and {b}."
+        return q, g
+
+def gen_decimals_question(grade):
+    kind = random.choice(['add','sub','mul'])
+    if kind == 'add':
+        a = round(random.uniform(0.1, 9.9), 2)
+        b = round(random.uniform(0.1, 9.9), 2)
+        q = f"{a} + {b} = ? (round to 2 decimals)"
+        ans = round(a + b, 2)
+        return q, ans
+    elif kind == 'sub':
+        a = round(random.uniform(1.0, 15.0), 2)
+        b = round(random.uniform(0.1, min(9.9, a-0.1)), 2)
+        q = f"{a} - {b} = ? (round to 2 decimals)"
+        ans = round(a - b, 2)
+        return q, ans
+    else:
+        a = round(random.uniform(0.5, 5.0), 2)
+        b = round(random.uniform(0.5, 5.0), 2)
+        q = f"{a} × {b} = ? (round to 2 decimals)"
+        ans = round(a * b, 2)
+        return q, ans
+
+def gen_time_measurement(grade):
+    kind = random.choice(['convert_minutes','add_time','read_clock'])
+    if kind == 'convert_minutes':
+        mins = random.choice([15,30,45,60,90,120,75,135])
+        q = f"Convert {mins} minutes into hours and minutes (format H:M)."
+        hours = mins // 60
+        rem = mins % 60
+        ans = f"{hours}:{rem:02d}"
+        return q, ans
+    elif kind == 'add_time':
+        h1 = random.randint(0,3)
+        m1 = random.choice([0,15,30,45])
+        h2 = random.randint(0,3)
+        m2 = random.choice([0,15,30,45])
+        total_mins = (h1*60 + m1) + (h2*60 + m2)
+        q = f"Add times {h1}:{m1:02d} + {h2}:{m2:02d}. Give answer as H:M."
+        ans = f"{total_mins//60}:{total_mins%60:02d}"
+        return q, ans
+    else:
+        h = random.randint(1,12)
+        m = random.choice([0,15,30,45])
+        q = f"What time is shown: {h}:{m:02d}? (Write H:M)"
+        ans = f"{h}:{m:02d}"
+        return q, ans
 
 # ---------------------------
 # Shape drawing & question
@@ -304,12 +381,20 @@ def gen_shape_question(grade):
     return {"type":"shape","question":q,"answer":ans,"choices":choices,"image":img}
 
 # ---------------------------
-# Topic chooser & unified generator
+# Topic chooser & generator
 # ---------------------------
 def choose_topic(grade):
-    if grade <=4:
+    # note: you can tune which grades use which topics
+    if grade <= 3:
         return random.choice(["addition","subtraction","multiplication","division","comparison","story"])
-    elif grade <=8:
+    elif grade in (4,5):
+        return random.choice([
+            "addition","subtraction","multiplication","division","comparison","story",
+            "fractions_add","fraction_mixed","lcm","hcf","percentage","profit",
+            "area_rect","perimeter_rect","mul_basic",
+            "factors_multiples","decimals","time_measurement"
+        ])
+    elif grade <= 8:
         return random.choice(["fractions_add","fraction_mixed","lcm","hcf","percentage","profit","area_rect","perimeter_rect","mul_basic"])
     else:
         return random.choice(["function","sets","trig","slope","fraction_mixed","matrix"])
@@ -354,11 +439,17 @@ def generate_math_question(grade):
         q,a = gen_slope(grade); return {"type":"math","topic":"slope","question":q,"answer":a}
     if topic == "matrix":
         q,a = gen_matrix_add(grade); return {"type":"math","topic":"matrix","question":q,"answer":a}
+    if topic == "factors_multiples":
+        q,a = gen_factors_multiples(grade); return {"type":"math","topic":"factors_multiples","question":q,"answer":a}
+    if topic == "decimals":
+        q,a = gen_decimals_question(grade); return {"type":"math","topic":"decimals","question":q,"answer":a}
+    if topic == "time_measurement":
+        q,a = gen_time_measurement(grade); return {"type":"math","topic":"time","question":q,"answer":a}
     # fallback
     q,a = gen_addition(grade); return {"type":"math","topic":"addition","question":q,"answer":a}
 
 # ---------------------------
-# Core gameplay functions
+# Core gameplay: start/next/record
 # ---------------------------
 def start_level(grade, level):
     unlocked = st.session_state["level_unlocked"].get(grade,1)
@@ -375,12 +466,14 @@ def start_level(grade, level):
         "weak_topics": st.session_state.get("weak_topics", {}),
         "show_result": False,
         "last_result": None,
-        "score": st.session_state.get("score", 0)
+        "score": st.session_state.get("score", 0),
+        "level_results": []
     })
     next_q()
     return True
 
 def next_q():
+    # generate question and store time
     if st.session_state["mode"] == "Math Quiz":
         qdict = generate_math_question(st.session_state["grade"])
     else:
@@ -389,91 +482,156 @@ def next_q():
     st.session_state["current_ans"] = qdict["answer"]
     st.session_state["current_choices"] = qdict.get("choices")
     st.session_state["question_start_time"] = time.time()
-    # set a unique radio key base to avoid persisted selection between questions
+    # unique key for radio widgets
     st.session_state["shape_choice_key"] = f"shape_choice_{random.randint(100000,999999)}"
-    # request clear of ui input next render
+    # request clearing text input on next render (no on_change triggered)
     st.session_state["auto_clear_flag"] = True
+    # ensure ui_input is empty (we will clear safely in UI rendering)
+    # Do NOT set st.session_state["ui_input"] here to avoid triggering on_change
 
 def record_answer(given):
-    # given can be string, number, or None
-    q = st.session_state["current_q"]
-    correct = st.session_state["current_ans"]
+    """
+    given: raw answer provided by user (string/number). This function is called only
+    when user explicitly submits (Enter in text_input or Submit button for shapes).
+    It records per-question details, updates counters, and either moves to next question
+    or finishes level and saves details to CSV/JSON.
+    """
+    q = st.session_state.get("current_q")
+    correct = st.session_state.get("current_ans")
     topic = q.get("topic") if q else None
-    ok = False
-    # handle fractions dict
+    time_taken = None
+    if st.session_state.get("question_start_time"):
+        time_taken = round(time.time() - st.session_state["question_start_time"], 2)
+
+    # Normalize given: try convert numeric answers to float/int when appropriate
+    given_norm = given
+    # if given is empty string treat as None
+    if isinstance(given, str) and given.strip() == "":
+        given_norm = ""
+    # evaluation
+    is_correct = False
     try:
         if isinstance(correct, dict):
             frac = correct.get("fraction")
             dec = correct.get("decimal")
-            if isinstance(given, str) and given.strip() == frac:
-                ok = True
+            if isinstance(given_norm, str) and given_norm.strip() == frac:
+                is_correct = True
             else:
                 try:
-                    if abs(float(given) - float(dec)) <= 0.05:
-                        ok = True
+                    if abs(float(given_norm) - float(dec)) <= 0.05:
+                        is_correct = True
                 except:
-                    ok = False
+                    is_correct = False
         elif isinstance(correct, (int, float)):
             try:
-                if abs(float(given) - float(correct)) <= 0.5:
-                    ok = True
+                if abs(float(given_norm) - float(correct)) <= 0.05:
+                    is_correct = True
             except:
-                ok = False
+                # try comparing as strings lowercase
+                try:
+                    if str(given_norm).strip().lower() == str(correct).strip().lower():
+                        is_correct = True
+                except:
+                    is_correct = False
         else:
-            if str(given).strip().lower() == str(correct).strip().lower():
-                ok = True
+            if str(given_norm).strip().lower() == str(correct).strip().lower():
+                is_correct = True
     except Exception:
-        ok = False
+        is_correct = False
+
+    # build per-question detail dict
+    q_text = q.get("question") if q else ""
+    q_no = st.session_state.get("question_in_level",0) + 1
+    detail = {
+        "q_no": q_no,
+        "question": q_text,
+        "given": given_norm,
+        "correct_answer": correct,
+        "is_correct": is_correct,
+        "time_taken": time_taken,
+        "topic": topic,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    st.session_state["level_results"].append(detail)
 
     # update counters
     st.session_state["question_in_level"] += 1
-    if ok:
+    if is_correct:
         st.session_state["correct_in_level"] += 1
         st.session_state["score"] = st.session_state.get("score",0) + 10
     else:
-        # track weak topics
+        # track weak topic
         if topic:
             st.session_state["weak_topics"][topic] = st.session_state["weak_topics"].get(topic,0) + 1
 
-    # append history
+    # append short history for UI
     st.session_state["history"].append({
-        "q": q.get("question") if q else "N/A",
-        "given": given,
-        "correct": ok
+        "q": q_text,
+        "given": given_norm,
+        "correct": is_correct
     })
 
-    # end of level?
+    # check level end
     if st.session_state["question_in_level"] >= QUESTIONS_PER_LEVEL:
         total = st.session_state["question_in_level"]
-        correct_count = st.session_state["correct_in_level"]
-        percent = int(correct_count/total*100) if total>0 else 0
+        correct_cnt = st.session_state["correct_in_level"]
+        percent = int(correct_cnt/total*100) if total>0 else 0
         passed = percent >= PASS_PERCENT
-        st.session_state["last_result"] = {"total": total, "correct": correct_count, "percent": percent, "passed": passed}
-        # save progress
+        # prepare last_result including details
+        st.session_state["last_result"] = {
+            "total": total,
+            "correct": correct_cnt,
+            "percent": percent,
+            "passed": passed,
+            "details": st.session_state["level_results"][:]
+        }
+        # save into level_progress
         g = st.session_state["grade"]
         lvl = st.session_state["current_level"]
         st.session_state["level_progress"].setdefault(str(g), {})[str(lvl)] = st.session_state["last_result"]
+        # unlock next level if passed
         if passed and lvl < LEVELS_PER_GRADE:
             st.session_state["level_unlocked"][g] = max(st.session_state["level_unlocked"].get(g,1), lvl+1)
         st.session_state["show_result"] = True
-        # persist to file
+
+        # persist JSON progress
         save_progress({"level_progress": st.session_state["level_progress"], "level_unlocked": st.session_state["level_unlocked"]})
+
+        # append per-question rows to CSV leaderboard
+        # compose rows with percent info
+        rows = []
+        for d in st.session_state["level_results"]:
+            rows.append({
+                "timestamp": d["timestamp"],
+                "player": st.session_state.get("player","Player"),
+                "grade": st.session_state.get("grade"),
+                "level": st.session_state.get("current_level"),
+                "q_no": d["q_no"],
+                "question": d["question"],
+                "given": d["given"],
+                "correct_answer": d["correct_answer"],
+                "is_correct": int(d["is_correct"]),
+                "time_taken": d["time_taken"],
+                "percent_level": percent
+            })
+        append_leaderboard_rows(rows)
+
     else:
-        # continue
+        # move to next question (only called when user submitted explicitly)
         next_q()
 
 # ---------------------------
-# UI pieces
+# UI: header & sidebar
 # ---------------------------
-def header_section():
+def render_header():
     st.markdown(f"<h1 style='margin:0'>{APP_TITLE} {PAGE_ICON}</h1>", unsafe_allow_html=True)
-    st.markdown("<div style='background:linear-gradient(90deg,#A6C0FE,#F68084); padding:8px; border-radius:8px; margin-bottom:8px'>"
+    st.markdown("<div style='background:linear-gradient(90deg,#A6C0FE,#F68084); padding:6px; border-radius:8px;'>"
                 "<b style='color:white'>Play, Learn and Level Up — Grades 2 to 10</b></div>", unsafe_allow_html=True)
 
-def sidebar_section():
+def render_sidebar():
     st.sidebar.header("Player & Settings")
-    name = st.sidebar.text_input("Player name", value=st.session_state.get("player","Player"))
-    st.session_state["player"] = name
+    player = st.sidebar.text_input("Player name", value=st.session_state.get("player","Player"))
+    st.session_state["player"] = player
 
     grade = st.sidebar.selectbox("Grade", options=list(range(2,11)), index=st.session_state["grade"]-2)
     st.session_state["grade"] = grade
@@ -486,7 +644,7 @@ def sidebar_section():
     st.sidebar.write(f"Score (session): {st.session_state.get('score',0)}")
     st.sidebar.write(f"Weak topics: {st.session_state.get('weak_topics',{})}")
 
-    tlim = st.sidebar.slider("Time limit (seconds)", min_value=10, max_value=120, value=st.session_state["time_limit"])
+    tlim = st.sidebar.slider("Time limit per question (seconds)", min_value=10, max_value=120, value=st.session_state["time_limit"])
     st.session_state["time_limit"] = tlim
 
     if st.sidebar.button("Save Progress Now"):
@@ -500,7 +658,7 @@ def sidebar_section():
         st.sidebar.download_button("Download progress JSON", data=json.dumps({"level_progress": st.session_state["level_progress"], "level_unlocked": st.session_state["level_unlocked"]}), file_name="math_hero_progress_export.json")
 
     st.sidebar.markdown("---")
-    st.sidebar.write("Leaderboard")
+    st.sidebar.write("Leaderboard & Reports")
     if st.sidebar.button("Export Leaderboard CSV"):
         if os.path.exists(LEADERBOARD_FILE):
             with open(LEADERBOARD_FILE, "r", encoding="utf-8") as f:
@@ -512,10 +670,9 @@ def sidebar_section():
 # Main UI
 # ---------------------------
 def main_ui():
-    header_section()
-    sidebar_section()
+    render_header()
+    render_sidebar()
 
-    # Level chooser and start
     col1, col2 = st.columns([3,1])
     with col1:
         lvl = st.number_input("Choose Level", min_value=1, max_value=LEVELS_PER_GRADE, value=st.session_state["current_level"])
@@ -530,6 +687,7 @@ def main_ui():
                 if not ok:
                     st.error("Cannot start locked level.")
                 else:
+                    st.experimental_rerun = getattr(st, "rerun", None)
                     st.rerun()
             else:
                 st.error("This level is locked.")
@@ -537,12 +695,11 @@ def main_ui():
     st.markdown("---")
     if not st.session_state["started"]:
         st.info(f"Press Start Level. Each level: {QUESTIONS_PER_LEVEL} questions. Pass = {PASS_PERCENT}%")
-        # preview sample
         sample = generate_math_question(st.session_state["grade"])
         st.write("Sample:", sample["question"])
         st.stop()
 
-    # show progress within level
+    # progress display
     st.write(f"Grade {st.session_state['grade']} — Level {st.session_state['current_level']} | Q {st.session_state['question_in_level']+1}/{QUESTIONS_PER_LEVEL}")
     st.progress(min(100, int((st.session_state['question_in_level']/QUESTIONS_PER_LEVEL)*100)))
 
@@ -551,7 +708,7 @@ def main_ui():
         next_q()
         st.rerun()
 
-    # if show_result true, show summary
+    # show result screen when level ends
     if st.session_state["show_result"]:
         res = st.session_state["last_result"]
         st.markdown("---")
@@ -560,10 +717,30 @@ def main_ui():
             st.success(f"Level Passed! {res['correct']}/{res['total']} ({res['percent']}%)")
         else:
             st.error(f"Level Failed. {res['correct']}/{res['total']} ({res['percent']}%)")
-        st.write("Level Summary:")
-        st.write("- Correct:", res["correct"])
-        st.write("- Total:", res["total"])
-        st.write("- Percent:", res["percent"])
+
+        st.markdown("**Level Summary**")
+        st.write(f"- Correct: {res['correct']}")
+        st.write(f"- Total: {res['total']}")
+        st.write(f"- Percentage: {res['percent']}%")
+
+        st.markdown("**Question-wise Details**")
+        details = res.get("details", st.session_state.get("level_results", []))
+        rows = []
+        for i,d in enumerate(details, start=1):
+            rows.append({
+                "Q#": i,
+                "Question": d.get("question"),
+                "Your Answer": d.get("given"),
+                "Correct Answer": d.get("correct_answer"),
+                "Result": "✅" if d.get("is_correct") else "❌",
+                "Time(s)": d.get("time_taken")
+            })
+        if rows:
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True)
+        else:
+            st.write("No question details available.")
+
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Retry Level"):
@@ -578,14 +755,27 @@ def main_ui():
                         st.rerun()
                     else:
                         st.success("You completed all levels for this grade!")
-        # leaderboard save
+
         st.markdown("---")
-        name = st.text_input("Save to leaderboard — enter name", value=st.session_state.get("player","Player"))
-        if st.button("Save to Leaderboard"):
-            row = [datetime.utcnow().isoformat(), name, st.session_state["grade"], st.session_state["current_level"], st.session_state["score"], res["percent"]]
-            ok = append_leaderboard_row(row)
-            if ok:
-                st.success("Saved.")
+        name = st.text_input("Save to leaderboard — player name", value=st.session_state.get("player","Player"))
+        if st.button("Save to Leaderboard (CSV)"):
+            # we already appended rows to csv at level end, but allow explicit save (re-append)
+            # we'll append one more set with current timestamp if needed
+            appended = append_leaderboard_rows([{
+                "timestamp": datetime.utcnow().isoformat(),
+                "player": name,
+                "grade": st.session_state.get("grade"),
+                "level": st.session_state.get("current_level"),
+                "q_no": 0,
+                "question": "Level summary save",
+                "given": "",
+                "correct_answer": "",
+                "is_correct": "",
+                "time_taken": "",
+                "percent_level": res["percent"]
+            }])
+            if appended:
+                st.success("Saved to leaderboard.")
             else:
                 st.error("Save failed.")
         st.stop()
@@ -598,46 +788,45 @@ def main_ui():
         st.write("Topic:", qdict.get("topic","General"))
         st.write(qdict["question"])
 
-        # ensure ui_input cleared if requested
+        # clear input safely if requested (setting ui_input to "" will NOT trigger on_change)
         if st.session_state.get("auto_clear_flag"):
             st.session_state["ui_input"] = ""
             st.session_state["auto_clear_flag"] = False
 
-        # text input with on_change: send the current ui_input value
-        st.text_input("Type answer and press Enter", key="ui_input", on_change=lambda: record_answer(st.session_state.get("ui_input","")))
-        # timer display
-        elapsed = time.time() - st.session_state["question_start_time"] if st.session_state["question_start_time"] else 0
-        remaining = max(0, int(st.session_state["time_limit"] - elapsed))
+        # text input: Enter submits answer -> on_change triggers record_answer
+        st.text_input("Type your answer and press Enter", key="ui_input",
+                      on_change=lambda: record_answer(st.session_state.get("ui_input","")))
+
+        # show time left
+        elapsed = time.time() - st.session_state["question_start_time"] if st.session_state.get("question_start_time") else 0
+        remaining = max(0, int(st.session_state.get("time_limit",45) - elapsed))
         st.write(f"Time left: {remaining} seconds")
         if remaining <= 0:
-            record_answer("")  # treat as wrong
+            # timeout -> record empty and proceed
+            record_answer("")
             st.rerun()
 
     else:
-        # SHAPE CHALLENGE — FIXED SECTION
+        # shape challenge area
         st.subheader("Shape Challenge")
         buf = io.BytesIO()
         qdict["image"].save(buf, format="PNG")
         st.image(buf)
         st.write(qdict["question"])
 
-        # If there are choices, show radio with placeholder + unique key + Submit button
         if qdict.get("choices"):
-            # placeholder option to avoid auto-selecting the first real choice
+            # placeholder + unique key to avoid pre-selection bug
             options = ["Select an answer"] + [str(c) for c in qdict["choices"]]
-            # unique key ensures radio does not preserve previous selection
             unique_key = st.session_state.get("shape_choice_key") or f"shape_choice_{random.randint(100000,999999)}"
-            # render radio with default index 0
             selected = st.radio("Choose your answer 👇", options=options, index=0, key=unique_key)
-
-            # Submit button triggers recording
             if selected != "Select an answer":
                 if st.button("Submit Answer"):
-                    # record numeric or string accordingly
-                    # convert to float if possible (so record_answer handles numeric)
-                    val = None
+                    # convert numeric if possible
                     try:
                         val = float(selected)
+                        # convert integers to int for nicer comparisons
+                        if val.is_integer():
+                            val = int(val)
                     except:
                         val = selected
                     record_answer(val)
@@ -645,25 +834,25 @@ def main_ui():
             else:
                 st.info("👆 Please select an answer then press Submit.")
         else:
-            # fallback to typed input
+            # typed answer fallback
             if st.session_state.get("auto_clear_flag"):
                 st.session_state["ui_input"] = ""
                 st.session_state["auto_clear_flag"] = False
             st.text_input("Type answer and press Enter", key="ui_input", on_change=lambda: record_answer(st.session_state.get("ui_input","")))
 
-    # recent history
+    # footer: recent history
     st.markdown("---")
     st.subheader("Recent History (last 5)")
-    for h in st.session_state["history"][-5:][::-1]:
+    history = st.session_state.get("history", [])
+    for h in history[-5:][::-1]:
         st.write(f"- {h['q']} — {'✅' if h['correct'] else '❌'} (You: {h['given']})")
 
 # ---------------------------
-# run
+# Run
 # ---------------------------
 if __name__ == "__main__":
     main_ui()
-    # ensure question exists if started
-    if st.session_state["started"] and not st.session_state["current_q"] and not st.session_state["show_result"]:
+    # ensure if started and no current question we generate one (rare)
+    if st.session_state.get("started") and not st.session_state.get("current_q") and not st.session_state.get("show_result"):
         next_q()
         st.rerun()
-
